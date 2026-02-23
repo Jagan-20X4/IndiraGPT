@@ -4,9 +4,9 @@ import react from '@vitejs/plugin-react';
 import { copyFileSync, mkdirSync, readdirSync, statSync, existsSync } from 'fs';
 
 export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', '');
-    // Get backend port from environment variable or default to 8080
-    const backendPort = env.PORT || env.BACKEND_PORT || '8080';
+    // Load .env from backend directory (where credentials live)
+    const env = loadEnv(mode, path.resolve(__dirname, '..', 'backend'), '');
+    const backendPort = env.PORT || env.BACKEND_PORT || '5000';
     const backendUrl = `http://localhost:${backendPort}`;
     
     return {
@@ -27,17 +27,15 @@ export default defineConfig(({ mode }) => {
             target: backendUrl,
             changeOrigin: true,
             secure: false,
-            // Don't rewrite the path - keep /data as is
           },
         },
       },
       plugins: [
         react(),
-        // Plugin to copy data folder to dist during build
         {
           name: 'copy-data-folder',
           writeBundle() {
-            const dataDir = path.resolve(__dirname, 'data');
+            const dataDir = path.resolve(__dirname, '..', 'data');
             const distDataDir = path.resolve(__dirname, 'dist/data');
             try {
               if (existsSync(dataDir) && statSync(dataDir).isDirectory()) {

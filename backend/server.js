@@ -1,5 +1,5 @@
 // Simple Node.js server to inject runtime environment variables
-import 'dotenv/config'; // Load .env file
+import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -14,9 +14,12 @@ import { parse } from 'csv-parse/sync';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Load .env from backend directory
+dotenv.config({ path: path.join(__dirname, '.env') });
+
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 5000;
 
 // MongoDB connection
 // Format: mongodb+srv://username:password@cluster.mongodb.net/database
@@ -140,7 +143,7 @@ app.use(express.urlencoded({ extended: true, limit: '500mb' }));
 
 // Multer configuration for file uploads
 const upload = multer({ 
-  dest: 'uploads/',
+  dest: path.join(__dirname, 'uploads'),
   limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
   fileFilter: (req, file, cb) => {
     if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
@@ -318,7 +321,7 @@ function validatePipeline(pipeline) {
 // CRITICAL: Inject environment variables into index.html BEFORE serving static files
 // This ensures the API key is injected for all HTML requests
 // Only serve static files if dist folder exists (production mode)
-const distExists = fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
+const distExists = fs.existsSync(path.join(__dirname, '..', 'frontend', 'dist', 'index.html'));
 
 if (distExists) {
   app.get('/', (req, res) => {
@@ -341,7 +344,7 @@ if (distExists) {
 
 // Function to inject API key and serve HTML
 function injectApiKeyAndServe(req, res) {
-  const indexPath = path.join(__dirname, 'dist', 'index.html');
+  const indexPath = path.join(__dirname, '..', 'frontend', 'dist', 'index.html');
   
   if (!fs.existsSync(indexPath)) {
     return res.status(404).send('Build files not found. Please build the application first.');
@@ -1418,7 +1421,7 @@ app.post('/api/data/query', authenticateToken, async (req, res) => {
   // All CSV files are served from MongoDB via the /data/:filename route above
 
   // General static files (AFTER /data routes to avoid conflicts)
-  app.use(express.static(path.join(__dirname, 'dist')));
+  app.use(express.static(path.join(__dirname, '..', 'frontend', 'dist')));
 
   // Fallback: For any other routes, serve index.html with API key injection (SPA routing)
   app.get('*', (req, res, next) => {
@@ -1471,9 +1474,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n❌ Port ${PORT} is already in use!`);
-    console.error('   Please stop the process using port 8080 or change PORT in .env');
+    console.error('   Please stop the process using port 5000 or change PORT in .env');
     console.error('   To find and kill the process:');
-    console.error('   Windows: netstat -ano | findstr :8080');
+    console.error('   Windows: netstat -ano | findstr :5000');
     console.error('   Then: taskkill /PID <PID> /F');
     process.exit(1);
   } else {
