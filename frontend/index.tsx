@@ -1215,7 +1215,7 @@ const authAPI = {
       const contentType = res.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
         const text = await res.text();
-        throw new Error(`Server returned non-JSON response. Make sure the Express server is running on port 5000. Response: ${text.substring(0, 200)}`);
+        throw new Error(`Server returned non-JSON response. Make sure the Express server is running on port 5005. Response: ${text.substring(0, 200)}`);
       }
       
       if (!res.ok) {
@@ -1227,7 +1227,7 @@ const authAPI = {
     } catch (err: any) {
       if (err.message && err.message.includes('JSON')) {
         
-        throw new Error('Cannot connect to server. Please make sure the Express server is running on port 5000. Run: npm run dev:server');
+        throw new Error('Cannot connect to server. Please make sure the Express server is running on port 5005. Run: npm run dev:server');
       }
       throw err;
     }
@@ -2514,7 +2514,7 @@ const App = () => {
       }
       
       const isDev = window.location.hostname === 'localhost' && window.location.port === '3000';
-      const backendUrl = isDev ? 'http://localhost:5000' : '';
+      const backendUrl = isDev ? 'http://localhost:5005' : '';
       
       if (forceReload) {
         setSqlTables([]);
@@ -3034,7 +3034,7 @@ ${contextData.substring(0, 15000)}...
     const targetFile = fileName || findFileNameFromPipeline(pipeline);
     
     const isDev = window.location.hostname === 'localhost' && window.location.port === '3000';
-    const backendUrl = isDev ? 'http://localhost:5000' : '';
+    const backendUrl = isDev ? 'http://localhost:5005' : '';
     
     const res = await fetch(`${backendUrl}/api/data/query`, {
       method: 'POST',

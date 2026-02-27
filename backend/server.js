@@ -19,7 +19,7 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5005;
 
 // MongoDB connection
 // Format: mongodb+srv://username:password@cluster.mongodb.net/database
@@ -1474,9 +1474,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n❌ Port ${PORT} is already in use!`);
-    console.error('   Please stop the process using port 5000 or change PORT in .env');
+    console.error('   Please stop the process using port 5005 or change PORT in .env');
     console.error('   To find and kill the process:');
-    console.error('   Windows: netstat -ano | findstr :5000');
+    console.error('   Windows: netstat -ano | findstr :5005');
     console.error('   Then: taskkill /PID <PID> /F');
     process.exit(1);
   } else {
