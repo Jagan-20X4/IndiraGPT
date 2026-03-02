@@ -1180,6 +1180,7 @@ interface AuthUser {
   role: 'admin' | 'user';
   createdAt?: string;
   lastLogin?: string;
+  mustChangePassword?: boolean;
 }
 
 interface User {
@@ -1264,6 +1265,22 @@ const authAPI = {
       }
     }
     localStorage.removeItem('auth_token');
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<AuthUser> {
+    const token = localStorage.getItem('auth_token');
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to change password');
+    return data.user;
   },
 
   async getAllUsers(): Promise<User[]> {
@@ -1464,9 +1481,9 @@ const LoginLogo = () => {
   return (
     <img 
       ref={imgRef}
-      src="/assets/indira-logo.avif" 
+      src="/assets/Logo.png" 
       alt="INDIRA IVF FERTILITY & IVF CENTRE" 
-      className="h-40 object-contain"
+      className="h-16 md:h-20 object-contain object-left"
       onError={(e) => {
         if (hasLoadedRef.current) return;
         
@@ -1548,9 +1565,9 @@ const IndiraLogo = ({ className = "h-12", showFallback = true }: { className?: s
   return (
     <img 
       ref={imgRef}
-      src="/assets/indira-logo.avif" 
+      src="/assets/Logo.png" 
       alt="INDIRA IVF FERTILITY & IVF CENTRE" 
-      className={className + " object-contain"}
+      className={className + " object-contain object-left"}
       onError={(e) => {
         // If image already loaded successfully, ignore error
         if (hasLoadedRef.current) {
@@ -1625,13 +1642,14 @@ const LoginPage = ({ onLogin }: { onLogin: (user: AuthUser) => void }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-pink-50 via-white to-rose-50 p-4">
+    <div className="min-h-screen relative flex flex-col bg-gradient-to-br from-pink-50 via-white to-rose-50 p-4">
+      {/* Logo in left corner */}
+      <div className="absolute top-4 left-4 md:top-6 md:left-6 z-10">
+        <LoginLogo />
+      </div>
+      <div className="flex-1 flex items-center justify-center">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-pink-100">
         <div className="text-center mb-8">
-          {/* Official INDIRA IVF Logo */}
-          <div className="flex justify-center mb-4">
-            <LoginLogo />
-          </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-1">INDIRA GPT</h1>
           <p className="text-sm text-gray-600">Strategy & Empathy Platform</p>
         </div>
@@ -1688,6 +1706,145 @@ const LoginPage = ({ onLogin }: { onLogin: (user: AuthUser) => void }) => {
             )}
           </button>
         </form>
+      </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================
+// Change Password (first-time login) Component
+// ============================================
+const ChangePasswordPage = ({
+  currentUser,
+  onSuccess,
+  onLogout
+}: {
+  currentUser: AuthUser;
+  onSuccess: (updatedUser: AuthUser) => void;
+  onLogout: () => void;
+}) => {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (newPassword.length < 6) {
+      setError('New password must be at least 6 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('New password and confirmation do not match');
+      return;
+    }
+    setLoading(true);
+    try {
+      const updatedUser = await authAPI.changePassword(currentPassword, newPassword);
+      onSuccess(updatedUser);
+    } catch (err: any) {
+      setError(err.message || 'Failed to change password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen relative flex flex-col bg-gradient-to-br from-pink-50 via-white to-rose-50 p-4">
+      {/* Logo in left corner */}
+      <div className="absolute top-4 left-4 md:top-6 md:left-6 z-10">
+        <LoginLogo />
+      </div>
+      <div className="flex-1 flex items-center justify-center">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-pink-100">
+        <div className="text-center mb-6">
+          <h1 className="text-xl font-bold text-gray-900 mb-1">Set your password</h1>
+          <p className="text-sm text-gray-600">
+            You are logging in for the first time. Please choose a new password to continue.
+          </p>
+          <p className="text-xs text-slate-500 mt-2">{currentUser.email}</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="current-password" className="block text-sm font-medium text-gray-700 mb-2">
+              Current password
+            </label>
+            <input
+              id="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              required
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent outline-none transition"
+              placeholder="••••••••"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="new-password" className="block text-sm font-medium text-gray-700 mb-2">
+              New password
+            </label>
+            <input
+              id="new-password"
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={6}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent outline-none transition"
+              placeholder="At least 6 characters"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="confirm-password" className="block text-sm font-medium text-gray-700 mb-2">
+              Confirm new password
+            </label>
+            <input
+              id="confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent outline-none transition"
+              placeholder="••••••••"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-gradient-to-r from-pink-500 to-rose-600 text-white py-3 rounded-lg font-semibold hover:from-pink-600 hover:to-rose-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                Updating...
+              </>
+            ) : (
+              'Update password'
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full text-sm text-slate-500 hover:text-slate-700 py-2"
+          >
+            Log out instead
+          </button>
+        </form>
+      </div>
       </div>
     </div>
   );
@@ -3937,6 +4094,17 @@ ${contextData.substring(0, 15000)}...
   // Show login page if not authenticated
   if (!user) {
     return <LoginPage onLogin={handleLogin} />;
+  }
+
+  // First-time login: must change password before using the app
+  if (user.mustChangePassword) {
+    return (
+      <ChangePasswordPage
+        currentUser={user}
+        onSuccess={(updatedUser) => setUser(updatedUser)}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   // Show admin panel if admin and showAdmin is true

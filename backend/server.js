@@ -103,7 +103,8 @@ async function connectDB() {
         passwordHash: adminPassword,
         role: 'admin',
         createdAt: new Date(),
-        lastLogin: null
+        lastLogin: null,
+        mustChangePassword: true
       });
       console.log('✅ Default admin user created: admin@indira.com / admin123');
       console.log('⚠️  Please change the default admin password after first login!');
@@ -488,7 +489,8 @@ app.post('/api/auth/login', async (req, res) => {
       user: {
         email: user.email,
         role: user.role,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        mustChangePassword: user.mustChangePassword === true
       }
     });
   } catch (error) {
@@ -514,7 +516,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
       email: user.email,
       role: user.role,
       createdAt: user.createdAt,
-      lastLogin: user.lastLogin
+      lastLogin: user.lastLogin,
+      mustChangePassword: user.mustChangePassword === true
     });
   } catch (error) {
     console.error('Get user error:', error);
@@ -525,6 +528,48 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 // Logout endpoint (client-side token removal, but we can log it)
 app.post('/api/auth/logout', authenticateToken, (req, res) => {
   res.json({ message: 'Logged out successfully' });
+});
+
+// Change password (first-time login or user-initiated)
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+    const user = await db.collection('users').findOne({ email: req.user.email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      { $set: { passwordHash: newHash, mustChangePassword: false } }
+    );
+    res.json({
+      message: 'Password changed successfully',
+      user: {
+        email: user.email,
+        role: user.role,
+        createdAt: user.createdAt,
+        lastLogin: user.lastLogin,
+        mustChangePassword: false
+      }
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ============================================
@@ -610,7 +655,8 @@ app.post('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =
       accessibleFiles: Array.isArray(accessibleFiles) ? accessibleFiles : [],
       createdAt: new Date(),
       lastLogin: null,
-      addedBy: addedByEmail
+      addedBy: addedByEmail,
+      mustChangePassword: true
     });
     
     res.status(201).json({
