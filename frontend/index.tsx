@@ -1283,6 +1283,98 @@ const authAPI = {
     return data.user;
   },
 
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim().toLowerCase() })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  },
+
+  async logPrompt(prompt: string): Promise<void> {
+    const token = localStorage.getItem('auth_token');
+    if (!token || !prompt?.trim()) return;
+    try {
+      await fetch(`${API_BASE}/logs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ prompt: prompt.trim() })
+      });
+    } catch {
+      // Non-blocking
+    }
+  },
+
+  async reportUsage(usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number }): Promise<void> {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+    try {
+      await fetch(`${API_BASE}/usage`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(usage)
+      });
+    } catch {
+      // Non-blocking; ignore failures
+    }
+  },
+
+  async getUsageAdmin(): Promise<{ totalTokens: number; byUser: { email: string; totalTokens: number; promptTokens: number; completionTokens: number; lastUsed: string | null }[] }> {
+    const token = localStorage.getItem('auth_token');
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE}/admin/usage`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch usage');
+    }
+    const data = await res.json();
+    return {
+      totalTokens: data.totalTokens ?? 0,
+      byUser: (data.byUser ?? []).map((u: { email: string; totalTokens: number; promptTokens?: number; completionTokens?: number; lastUsed?: string | null }) => ({
+        email: u.email,
+        totalTokens: u.totalTokens ?? 0,
+        promptTokens: u.promptTokens ?? 0,
+        completionTokens: u.completionTokens ?? 0,
+        lastUsed: u.lastUsed ?? null
+      }))
+    };
+  },
+
+  async getLogsListAdmin(): Promise<{ email: string; lastLogAt: string; count: number }[]> {
+    const token = localStorage.getItem('auth_token');
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE}/admin/logs`, { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch logs list');
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  },
+
+  async getUserLogsAdmin(email: string): Promise<{ prompt: string; createdAt: string }[]> {
+    const token = localStorage.getItem('auth_token');
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`${API_BASE}/admin/logs/${encodeURIComponent(email)}`, { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch user logs');
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  },
+
   async getAllUsers(): Promise<User[]> {
     const token = localStorage.getItem('auth_token');
     if (!token) throw new Error('Not authenticated');
@@ -1624,6 +1716,11 @@ const LoginPage = ({ onLogin }: { onLogin: (user: AuthUser) => void }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [logoError, setLogoError] = useState(false);
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+  const [forgotError, setForgotError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1638,6 +1735,28 @@ const LoginPage = ({ onLogin }: { onLogin: (user: AuthUser) => void }) => {
       setError(err.message || 'Login failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openForgotModal = () => {
+    setShowForgotModal(true);
+    setForgotEmail(email);
+    setForgotSuccess(false);
+    setForgotError('');
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setForgotError('');
+    setForgotLoading(true);
+    try {
+      await authAPI.forgotPassword(forgotEmail);
+      setForgotSuccess(true);
+    } catch (err: any) {
+      setForgotError(err.message || 'Failed to send email');
+    } finally {
+      setForgotLoading(false);
     }
   };
 
@@ -1705,7 +1824,61 @@ const LoginPage = ({ onLogin }: { onLogin: (user: AuthUser) => void }) => {
               'Sign In'
             )}
           </button>
+
+          {error && (
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={openForgotModal}
+                className="text-sm text-pink-600 hover:text-pink-700 hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
         </form>
+
+        {showForgotModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowForgotModal(false)}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <h3 className="text-lg font-bold text-slate-900 mb-2">Forgot password</h3>
+              <p className="text-sm text-slate-600 mb-4">Enter your email. We’ll send a temporary password to log in; you’ll then set a new password.</p>
+              {forgotSuccess ? (
+                <>
+                  <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+                    If an account exists for this email, a temporary password has been sent. Check your inbox (and spam), then log in with it. You’ll be asked to set a new password.
+                  </p>
+                  <button onClick={() => setShowForgotModal(false)} className="w-full py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium">Close</button>
+                </>
+              ) : (
+                <form onSubmit={handleForgotSubmit} className="space-y-4">
+                  {forgotError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">{forgotError}</div>
+                  )}
+                  <div>
+                    <label htmlFor="forgot-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input
+                      id="forgot-email"
+                      type="email"
+                      value={forgotEmail}
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      required
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 outline-none"
+                      placeholder="your@email.com"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setShowForgotModal(false)} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium">Cancel</button>
+                    <button type="submit" disabled={forgotLoading} className="flex-1 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+                      {forgotLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Send temporary password
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       </div>
     </div>
@@ -1868,9 +2041,21 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [lastSync, setLastSync] = useState<string>('');
+  const [usageData, setUsageData] = useState<{ totalTokens: number; byUser: { email: string; totalTokens: number; promptTokens: number; completionTokens: number; lastUsed: string | null }[] } | null>(null);
+  const [loadingUsage, setLoadingUsage] = useState(false);
+  const [showLogsModal, setShowLogsModal] = useState(false);
+  const [logsList, setLogsList] = useState<{ email: string; lastLogAt: string; count: number }[]>([]);
+  const [selectedLogEmail, setSelectedLogEmail] = useState<string | null>(null);
+  const [userLogs, setUserLogs] = useState<{ prompt: string; createdAt: string }[]>([]);
+  const [loadingLogsList, setLoadingLogsList] = useState(false);
+  const [loadingUserLogs, setLoadingUserLogs] = useState(false);
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  useEffect(() => {
+    loadUsage();
   }, []);
 
   const loadData = async () => {
@@ -1887,6 +2072,46 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
       setError(err.message || 'Failed to load data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadUsage = async () => {
+    try {
+      setLoadingUsage(true);
+      const data = await authAPI.getUsageAdmin();
+      setUsageData(data);
+    } catch {
+      setUsageData(null);
+    } finally {
+      setLoadingUsage(false);
+    }
+  };
+
+  const openLogsModal = async () => {
+    setShowLogsModal(true);
+    setSelectedLogEmail(null);
+    setUserLogs([]);
+    try {
+      setLoadingLogsList(true);
+      const list = await authAPI.getLogsListAdmin();
+      setLogsList(list);
+    } catch {
+      setLogsList([]);
+    } finally {
+      setLoadingLogsList(false);
+    }
+  };
+
+  const selectLogUser = async (email: string) => {
+    setSelectedLogEmail(email);
+    try {
+      setLoadingUserLogs(true);
+      const logs = await authAPI.getUserLogsAdmin(email);
+      setUserLogs(logs);
+    } catch {
+      setUserLogs([]);
+    } finally {
+      setLoadingUserLogs(false);
     }
   };
 
@@ -2088,6 +2313,139 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
             </div>
           </div>
         </div>
+
+        {/* API Token Usage (admin only) */}
+        <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-6 mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-bold text-slate-900">API Token Usage</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={openLogsModal}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium transition flex items-center gap-2"
+              >
+                <FileText className="w-4 h-4" />
+                Logs
+              </button>
+              <button
+                onClick={loadUsage}
+                disabled={loadingUsage}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm font-medium transition disabled:opacity-50 flex items-center gap-2"
+              >
+                {loadingUsage ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Refresh
+              </button>
+            </div>
+          </div>
+          <p className="text-sm text-slate-500 mb-4">Gemini API tokens consumed (fetched from API). Visible to admin only.</p>
+          {loadingUsage && !usageData ? (
+            <div className="flex justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
+          ) : usageData ? (
+            <>
+              <div className="mb-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <span className="text-sm text-slate-600">Total tokens used (all users): </span>
+                <span className="text-xl font-bold text-slate-900">{usageData.totalTokens.toLocaleString()}</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-600">
+                      <th className="py-2 pr-4">User</th>
+                      <th className="py-2 pr-4">Total tokens</th>
+                      <th className="py-2 pr-4">Prompt</th>
+                      <th className="py-2 pr-4">Completion</th>
+                      <th className="py-2">Last used</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usageData.byUser.map((u) => (
+                      <tr key={u.email} className="border-b border-slate-100">
+                        <td className="py-2 pr-4 font-medium text-slate-800">{u.email}</td>
+                        <td className="py-2 pr-4 text-slate-700">{u.totalTokens.toLocaleString()}</td>
+                        <td className="py-2 pr-4 text-slate-600">{u.promptTokens.toLocaleString()}</td>
+                        <td className="py-2 pr-4 text-slate-600">{u.completionTokens.toLocaleString()}</td>
+                        <td className="py-2 text-slate-500">{u.lastUsed ? new Date(u.lastUsed).toLocaleString() : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-slate-500 py-4">Could not load usage data.</p>
+          )}
+        </div>
+
+        {/* Logs modal (admin only) */}
+        {showLogsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowLogsModal(false)}>
+            <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-bold text-slate-900">
+                  {selectedLogEmail ? `Logs: ${selectedLogEmail}` : 'Prompt logs'}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {selectedLogEmail && (
+                    <button
+                      onClick={() => { setSelectedLogEmail(null); setUserLogs([]); }}
+                      className="px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg"
+                    >
+                      Back
+                    </button>
+                  )}
+                  <button onClick={() => setShowLogsModal(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5" /></button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                {!selectedLogEmail ? (
+                  loadingLogsList ? (
+                    <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
+                  ) : logsList.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-6">No logs yet. User prompts will appear here.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {logsList.map((u) => (
+                        <li key={u.email}>
+                          <button
+                            onClick={() => selectLogUser(u.email)}
+                            className="w-full text-left p-3 rounded-lg border border-slate-200 hover:bg-slate-50 flex items-center justify-between"
+                          >
+                            <span className="font-medium text-slate-800">{u.email}</span>
+                            <span className="text-xs text-slate-500">{u.count} log{u.count !== 1 ? 's' : ''} · Last: {u.lastLogAt ? new Date(u.lastLogAt).toLocaleString() : '—'}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                ) : (
+                  loadingUserLogs ? (
+                    <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
+                  ) : userLogs.length === 0 ? (
+                    <p className="text-sm text-slate-500 py-6">No logs for this user.</p>
+                  ) : (
+                    <ul className="space-y-4">
+                      {userLogs.map((log, i) => {
+                        const d = new Date(log.createdAt);
+                        const dateStr = d.toLocaleDateString();
+                        const timeStr = d.toLocaleTimeString();
+                        const dayStr = d.toLocaleDateString(undefined, { weekday: 'long' });
+                        return (
+                          <li key={i} className="p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                            <div className="flex flex-wrap gap-2 text-xs text-slate-500 mb-2">
+                              <span>{dayStr}</span>
+                              <span>{dateStr}</span>
+                              <span>{timeStr}</span>
+                            </div>
+                            <p className="text-sm text-slate-800 whitespace-pre-wrap break-words">{log.prompt}</p>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm mb-6">
@@ -3564,12 +3922,15 @@ ${contextData.substring(0, 15000)}...
     
     setMessages(prev => [...prev, { role: 'model', text: '_🔍 Fetching data from SQL Table..._', type: 'text' }]);
 
-    const runGeneration = async (prompt: string, currentAttempt: number = 0): Promise<string> => {
+    const runGeneration = async (prompt: string, currentAttempt: number = 0): Promise<{ text: string; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }> => {
+        const zeroUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
         try {
             const resultStream = await chatSessionRef.current.sendMessageStream({ message: prompt });
             let streamedText = '';
+            let lastChunk: { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }; text?: string } | null = null;
             for await (const chunk of resultStream) {
-                const chunkText = chunk.text;
+                lastChunk = chunk as typeof lastChunk;
+                const chunkText = (chunk as { text?: string }).text;
                 if (chunkText) {
                     streamedText += chunkText;
                     setMessages(prev => {
@@ -3579,7 +3940,18 @@ ${contextData.substring(0, 15000)}...
                     });
                 }
             }
-            return streamedText;
+            let promptTokens = 0, completionTokens = 0, totalTokens = 0;
+            const meta = lastChunk?.usageMetadata;
+            if (meta && (meta.totalTokenCount != null || meta.promptTokenCount != null || meta.candidatesTokenCount != null)) {
+                promptTokens = Number(meta.promptTokenCount) || 0;
+                completionTokens = Number(meta.candidatesTokenCount) || 0;
+                totalTokens = Number(meta.totalTokenCount) || promptTokens + completionTokens;
+            } else {
+                totalTokens = Math.ceil((prompt.length + streamedText.length) / 4);
+                promptTokens = Math.ceil(prompt.length / 4);
+                completionTokens = totalTokens - promptTokens;
+            }
+            return { text: streamedText, usage: { promptTokens, completionTokens, totalTokens } };
         } catch (err: any) {
             console.error("API Error", err);
             
@@ -3627,7 +3999,7 @@ ${contextData.substring(0, 15000)}...
                     return updated;
                 });
                 setIsTyping(false);
-                return '';
+                return { text: '', usage: zeroUsage };
             }
             
             if (isQuotaError && currentAttempt < maxRetries) {
@@ -3647,7 +4019,8 @@ ${contextData.substring(0, 15000)}...
 
     const processResponseWithMongo = async (prompt: string, attemptCount: number): Promise<void> => {
         try {
-            const fullResponse = await runGeneration(prompt, 0);
+            const { text: fullResponse, usage } = await runGeneration(prompt, 0);
+            authAPI.reportUsage(usage).catch(() => {});
             
             const responseCheck = validateResponseAccess(fullResponse);
             if (!responseCheck.valid) {
@@ -3807,6 +4180,7 @@ ${contextData.substring(0, 15000)}...
         }
     };
 
+    authAPI.logPrompt(cleanText).catch(() => {});
     await processResponseWithMongo(finalPrompt, 0);
 
     setIsTyping(false);
@@ -4356,18 +4730,6 @@ ${contextData.substring(0, 15000)}...
 
                       {/* Main Input Area */}
                       <div className="p-4 bg-white border-t border-slate-100">
-                          {/* Attachments Preview */}
-                          {chatAttachments.length > 0 && (
-                              <div className="flex gap-2 mb-3 overflow-x-auto pb-2 scrollbar-hide">
-                                  {chatAttachments.map((att, i) => (
-                                      <div key={i} className="flex items-center gap-2 bg-pink-50 text-pink-700 px-3 py-1.5 rounded-lg text-xs font-medium border border-pink-100 whitespace-nowrap shadow-sm">
-                                          <FileText size={12} /> <span className="max-w-[100px] truncate">{att.name}</span>
-                                          <button onClick={() => removeAttachment(i)} className="hover:text-pink-900 ml-1"><X size={12} /></button>
-                                      </div>
-                                  ))}
-                              </div>
-                          )}
-                          
                           <div className="flex gap-3 items-end">
                               <button 
                                  onClick={() => chatFileInputRef.current?.click()}

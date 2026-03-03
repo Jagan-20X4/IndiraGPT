@@ -3,12 +3,14 @@ import dotenv from 'dotenv';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { MongoClient, GridFSBucket } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
+import nodemailer from 'nodemailer';
 import { parse } from 'csv-parse/sync';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -530,6 +532,56 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
   res.json({ message: 'Logged out successfully' });
 });
 
+// Forgot password: send temporary password by email
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    const user = await db.collection('users').findOne({ email });
+    const genericMessage = { message: 'If an account exists for this email, a temporary password has been sent. Please check your inbox and log in, then set a new password.' };
+    if (!user) {
+      return res.json(genericMessage);
+    }
+    const tempPassword = crypto.randomBytes(6).toString('hex');
+    const tempHash = await bcrypt.hash(tempPassword, 10);
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      { $set: { passwordHash: tempHash, mustChangePassword: true } }
+    );
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpFrom = process.env.SMTP_FROM || smtpUser;
+    if (!smtpHost || !smtpUser || !smtpPass) {
+      console.error('SMTP not configured; cannot send forgot-password email');
+      return res.status(503).json({ error: 'Email service is not configured. Please contact support.' });
+    }
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: { user: smtpUser, pass: smtpPass }
+    });
+    await transporter.sendMail({
+      from: smtpFrom,
+      to: email,
+      subject: 'INDIRA GPT – Temporary password',
+      text: `Your temporary password is: ${tempPassword}\n\nPlease log in with this password. You will be asked to set a new password immediately after logging in.\n\nDo not share this email.`,
+      html: `<p>Your temporary password is: <strong>${tempPassword}</strong></p><p>Please log in with this password. You will be asked to set a new password immediately after logging in.</p><p>Do not share this email.</p>`
+    });
+    res.json(genericMessage);
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Failed to send email. Please try again or contact support.' });
+  }
+});
+
 // Change password (first-time login or user-initiated)
 app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   try {
@@ -568,6 +620,131 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Change password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Report token usage (authenticated; used by frontend after each Gemini call)
+app.post('/api/usage', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const { promptTokens = 0, completionTokens = 0, totalTokens = 0 } = req.body;
+    const total = Number(totalTokens) || (Number(promptTokens) + Number(completionTokens)) || 0;
+    if (total <= 0) {
+      return res.status(400).json({ error: 'Invalid token counts' });
+    }
+    const email = req.user.email;
+    const user = await db.collection('users').findOne({ email });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const now = new Date();
+    await db.collection('users').updateOne(
+      { email },
+      {
+        $inc: {
+          totalTokensUsed: total,
+          promptTokensUsed: Number(promptTokens) || 0,
+          completionTokensUsed: Number(completionTokens) || 0
+        },
+        $set: { lastTokenUsedAt: now }
+      }
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Usage report error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get token usage summary (admin only)
+app.get('/api/admin/usage', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const users = await db.collection('users')
+      .find({}, { projection: { email: 1, totalTokensUsed: 1, promptTokensUsed: 1, completionTokensUsed: 1, lastTokenUsedAt: 1 } })
+      .toArray();
+    let totalTokens = 0;
+    const byUser = users.map(u => {
+      const used = Number(u.totalTokensUsed) || 0;
+      totalTokens += used;
+      return {
+        email: u.email,
+        totalTokens: used,
+        promptTokens: Number(u.promptTokensUsed) || 0,
+        completionTokens: Number(u.completionTokensUsed) || 0,
+        lastUsed: u.lastTokenUsedAt || null
+      };
+    });
+    res.json({ totalTokens, byUser });
+  } catch (error) {
+    console.error('Admin usage error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Log user prompt (authenticated; stores what the user searched)
+app.post('/api/logs', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+    const truncated = prompt.length > 2000 ? prompt.substring(0, 2000) + '…' : prompt;
+    const email = req.user.email;
+    await db.collection('promptLogs').insertOne({
+      email,
+      prompt: truncated,
+      createdAt: new Date()
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Log prompt error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// List users that have logs (admin only)
+app.get('/api/admin/logs', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const agg = await db.collection('promptLogs').aggregate([
+      { $group: { _id: '$email', lastLogAt: { $max: '$createdAt' }, count: { $sum: 1 } } },
+      { $sort: { lastLogAt: -1 } },
+      { $project: { email: '$_id', lastLogAt: 1, count: 1, _id: 0 } }
+    ]).toArray();
+    res.json(agg);
+  } catch (error) {
+    console.error('Admin logs list error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get logs for a specific user (admin only)
+app.get('/api/admin/logs/:email', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const email = decodeURIComponent(req.params.email);
+    const logs = await db.collection('promptLogs')
+      .find({ email })
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .project({ prompt: 1, createdAt: 1, _id: 0 })
+      .toArray();
+    res.json(logs);
+  } catch (error) {
+    console.error('Admin logs user error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
