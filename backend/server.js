@@ -6,7 +6,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { MongoClient, GridFSBucket } from 'mongodb';
+import { MongoClient, GridFSBucket, ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
@@ -699,14 +699,47 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
     }
     const truncated = prompt.length > 2000 ? prompt.substring(0, 2000) + '…' : prompt;
     const email = req.user.email;
-    await db.collection('promptLogs').insertOne({
+    const inserted = await db.collection('promptLogs').insertOne({
       email,
       prompt: truncated,
       createdAt: new Date()
     });
-    res.json({ ok: true });
+    res.json({ ok: true, id: inserted.insertedId.toString() });
   } catch (error) {
     console.error('Log prompt error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update log with response (authenticated user can only update their own log)
+app.patch('/api/logs/:id', authenticateToken, async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ error: 'Database not connected' });
+    }
+    const id = req.params.id;
+    const response = typeof req.body?.response === 'string' ? req.body.response.trim() : '';
+    if (!id) {
+      return res.status(400).json({ error: 'Log id is required' });
+    }
+    let objectId;
+    try {
+      objectId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ error: 'Invalid log id' });
+    }
+    const truncated = response.length > 50000 ? response.substring(0, 50000) + '…' : response;
+    const result = await db.collection('promptLogs').findOneAndUpdate(
+      { _id: objectId, email: req.user.email },
+      { $set: { response: truncated } },
+      { returnDocument: 'after' }
+    );
+    if (!result) {
+      return res.status(404).json({ error: 'Log not found or access denied' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Update log response error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -740,7 +773,7 @@ app.get('/api/admin/logs/:email', authenticateToken, requireAdmin, async (req, r
       .find({ email })
       .sort({ createdAt: -1 })
       .limit(200)
-      .project({ prompt: 1, createdAt: 1, _id: 0 })
+      .project({ prompt: 1, createdAt: 1, response: 1, _id: 1 })
       .toArray();
     res.json(logs);
   } catch (error) {

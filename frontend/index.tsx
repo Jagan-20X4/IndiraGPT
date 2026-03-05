@@ -1294,17 +1294,36 @@ const authAPI = {
     return data;
   },
 
-  async logPrompt(prompt: string): Promise<void> {
+  async logPrompt(prompt: string): Promise<string | null> {
     const token = localStorage.getItem('auth_token');
-    if (!token || !prompt?.trim()) return;
+    if (!token || !prompt?.trim()) return null;
     try {
-      await fetch(`${API_BASE}/logs`, {
+      const res = await fetch(`${API_BASE}/logs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ prompt: prompt.trim() })
+      });
+      const data = await res.json().catch(() => ({}));
+      return data?.id ?? null;
+    } catch {
+      return null;
+    }
+  },
+
+  async updateLogResponse(logId: string, response: string): Promise<void> {
+    const token = localStorage.getItem('auth_token');
+    if (!token || !logId) return;
+    try {
+      await fetch(`${API_BASE}/logs/${encodeURIComponent(logId)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ response })
       });
     } catch {
       // Non-blocking
@@ -1363,7 +1382,7 @@ const authAPI = {
     return Array.isArray(data) ? data : [];
   },
 
-  async getUserLogsAdmin(email: string): Promise<{ prompt: string; createdAt: string }[]> {
+  async getUserLogsAdmin(email: string): Promise<{ prompt: string; createdAt: string; response?: string; _id?: string }[]> {
     const token = localStorage.getItem('auth_token');
     if (!token) throw new Error('Not authenticated');
     const res = await fetch(`${API_BASE}/admin/logs/${encodeURIComponent(email)}`, { headers: { 'Authorization': `Bearer ${token}` } });
@@ -2046,7 +2065,8 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
   const [showLogsModal, setShowLogsModal] = useState(false);
   const [logsList, setLogsList] = useState<{ email: string; lastLogAt: string; count: number }[]>([]);
   const [selectedLogEmail, setSelectedLogEmail] = useState<string | null>(null);
-  const [userLogs, setUserLogs] = useState<{ prompt: string; createdAt: string }[]>([]);
+  const [userLogs, setUserLogs] = useState<{ prompt: string; createdAt: string; response?: string; _id?: string }[]>([]);
+  const [selectedLogDetail, setSelectedLogDetail] = useState<{ prompt: string; createdAt: string; response?: string } | null>(null);
   const [loadingLogsList, setLoadingLogsList] = useState(false);
   const [loadingUserLogs, setLoadingUserLogs] = useState(false);
 
@@ -2119,14 +2139,13 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // Validate all files are CSV
-    const invalidFiles = Array.from(files).filter(file => !file.name.endsWith('.csv'));
+    const fileArray: File[] = Array.from(files);
+    const invalidFiles = fileArray.filter((file: File) => !file.name.endsWith('.csv'));
     if (invalidFiles.length > 0) {
-      setError(`Only CSV files are allowed. Invalid files: ${invalidFiles.map(f => f.name).join(', ')}`);
+      setError(`Only CSV files are allowed. Invalid files: ${invalidFiles.map((f: File) => f.name).join(', ')}`);
       return;
     }
 
-    const fileArray = Array.from(files);
     const totalFiles = fileArray.length;
 
     try {
@@ -2134,7 +2153,6 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
       setError('');
       setUploadProgress({ current: 0, total: totalFiles });
       
-      // Upload all files sequentially to show progress
       for (let i = 0; i < fileArray.length; i++) {
         try {
           await authAPI.uploadFile(fileArray[i]);
@@ -2377,26 +2395,51 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
 
         {/* Logs modal (admin only) */}
         {showLogsModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowLogsModal(false)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => { setShowLogsModal(false); setSelectedLogDetail(null); }}>
             <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
               <div className="p-4 border-b border-slate-200 flex items-center justify-between">
                 <h3 className="text-lg font-bold text-slate-900">
-                  {selectedLogEmail ? `Logs: ${selectedLogEmail}` : 'Prompt logs'}
+                  {selectedLogDetail ? 'Question & Answer' : selectedLogEmail ? `Logs: ${selectedLogEmail}` : 'Prompt logs'}
                 </h3>
                 <div className="flex items-center gap-2">
-                  {selectedLogEmail && (
+                  {selectedLogDetail ? (
                     <button
-                      onClick={() => { setSelectedLogEmail(null); setUserLogs([]); }}
+                      onClick={() => setSelectedLogDetail(null)}
+                      className="px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg"
+                    >
+                      Back
+                    </button>
+                  ) : selectedLogEmail && (
+                    <button
+                      onClick={() => { setSelectedLogEmail(null); setUserLogs([]); setSelectedLogDetail(null); }}
                       className="px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg"
                     >
                       Back
                     </button>
                   )}
-                  <button onClick={() => setShowLogsModal(false)} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5" /></button>
+                  <button onClick={() => { setShowLogsModal(false); setSelectedLogDetail(null); }} className="p-2 hover:bg-slate-100 rounded-lg"><X className="w-5 h-5" /></button>
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4">
-                {!selectedLogEmail ? (
+                {selectedLogDetail ? (
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Question</p>
+                      <p className="text-sm text-slate-800 whitespace-pre-wrap break-words bg-slate-50 p-3 rounded-lg border border-slate-100">{selectedLogDetail.prompt}</p>
+                      <p className="text-xs text-slate-400 mt-2">{new Date(selectedLogDetail.createdAt).toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Answer</p>
+                      <div className="text-sm text-slate-700 prose prose-sm max-w-none bg-white p-3 rounded-lg border border-slate-100">
+                        {selectedLogDetail.response ? (
+                          <div className="markdown-body" dangerouslySetInnerHTML={safeRenderMarkdown(selectedLogDetail.response)} />
+                        ) : (
+                          <p className="text-slate-500 italic">No response stored for this log.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : !selectedLogEmail ? (
                   loadingLogsList ? (
                     <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-slate-400" /></div>
                   ) : logsList.length === 0 ? (
@@ -2429,13 +2472,19 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
                         const timeStr = d.toLocaleTimeString();
                         const dayStr = d.toLocaleDateString(undefined, { weekday: 'long' });
                         return (
-                          <li key={i} className="p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                            <div className="flex flex-wrap gap-2 text-xs text-slate-500 mb-2">
-                              <span>{dayStr}</span>
-                              <span>{dateStr}</span>
-                              <span>{timeStr}</span>
-                            </div>
-                            <p className="text-sm text-slate-800 whitespace-pre-wrap break-words">{log.prompt}</p>
+                          <li key={i}>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLogDetail({ prompt: log.prompt, createdAt: log.createdAt, response: log.response })}
+                              className="w-full text-left p-3 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-slate-100 hover:border-slate-300 transition-colors"
+                            >
+                              <div className="flex flex-wrap gap-2 text-xs text-slate-500 mb-2">
+                                <span>{dayStr}</span>
+                                <span>{dateStr}</span>
+                                <span>{timeStr}</span>
+                              </div>
+                              <p className="text-sm text-slate-800 whitespace-pre-wrap break-words">{log.prompt}</p>
+                            </button>
                           </li>
                         );
                       })}
@@ -3255,7 +3304,7 @@ const App = () => {
     
     // Get all file names from loaded schemas
     const allFileNames = new Set<string>();
-    Object.values(tableSchemas).forEach(schema => {
+    Object.values(tableSchemas).forEach((schema: { columns: string[]; rowCount: number; fileName: string }) => {
       if (schema.fileName) allFileNames.add(schema.fileName);
     });
     
@@ -3304,7 +3353,7 @@ const App = () => {
     const unauthorizedReferences: string[] = [];
     
     // Check all loaded files
-    Object.values(tableSchemas).forEach(schema => {
+    Object.values(tableSchemas).forEach((schema: { columns: string[]; rowCount: number; fileName: string }) => {
       if (schema.fileName && !userAccessibleFiles.includes(schema.fileName)) {
         const fileNameWithoutExt = schema.fileName.replace('.csv', '').toLowerCase();
         const fileNameWithUnderscores = fileNameWithoutExt.replace(/\s+/g, '_');
@@ -3340,11 +3389,11 @@ const App = () => {
     });
     
     const accessibleSchemas = Object.fromEntries(
-      Object.entries(tableSchemas).filter(([tableName, schema]) => {
+      Object.entries(tableSchemas).filter(([_tableName, schema]: [string, { columns: string[]; rowCount: number; fileName: string }]) => {
         if (userAccessibleFiles.length === 0) return true;
         return userAccessibleFiles.includes(schema.fileName);
       })
-    );
+    ) as Record<string, { columns: string[]; rowCount: number; fileName: string }>;
     
     return `
 **Role & Persona:**
@@ -3356,7 +3405,7 @@ You must synthesize answers from **ALL available sources** (Acquisition, Demogra
 
 **CAPABILITIES:**
 1. **MongoDB Data Engine:** You have access to MongoDB collections with structured data. If data analysis is needed, output a MongoDB aggregation pipeline in a \`\`\`mongodb ... \`\`\` code block.
-   - Collections available: ${accessibleTableNames.length > 0 ? accessibleTableNames.map(cn => {
+   - Collections available: ${accessibleTableNames.length > 0 ? accessibleTableNames.map((cn: string) => {
     const schema = accessibleSchemas[cn];
     return schema ? `${cn} (${schema.fileName})` : cn;
   }).join(', ') : 'None yet'}.
@@ -3439,7 +3488,7 @@ E. THE COMPETITIVE LAYER (Market Intelligence)
 - Fatal Error Rate: (Sum of Fatal Counts / Total Calls Audited)
 
 **AVAILABLE DATA SOURCES (MongoDB Collections):**
-${accessibleTableNames.length > 0 ? accessibleTableNames.map(collName => {
+${accessibleTableNames.length > 0 ? accessibleTableNames.map((collName: string) => {
   const schema = accessibleSchemas[collName];
   if (schema && schema.rowCount > 0) {
     const businessName = schema.fileName.replace('.csv', '').replace(/_/g, ' ');
@@ -4017,7 +4066,7 @@ ${contextData.substring(0, 15000)}...
         }
     };
 
-    const processResponseWithMongo = async (prompt: string, attemptCount: number): Promise<void> => {
+    const processResponseWithMongo = async (prompt: string, attemptCount: number, logId?: string | null): Promise<void> => {
         try {
             const { text: fullResponse, usage } = await runGeneration(prompt, 0);
             authAPI.reportUsage(usage).catch(() => {});
@@ -4030,6 +4079,7 @@ ${contextData.substring(0, 15000)}...
                     updated[messageIndex] = { role: 'model', text: deniedMessage, type: 'text' };
                     return updated;
                 });
+                if (logId) authAPI.updateLogResponse(logId, deniedMessage).catch(() => {});
                 scrollToBottom();
                 return;
             }
@@ -4093,22 +4143,24 @@ ${contextData.substring(0, 15000)}...
                         nextPrompt += `DO NOT use any other number. The query result shows ${exactValueKey}: ${exactValueFormatted}\n`;
                     }
                     
-                    await processResponseWithMongo(nextPrompt, attemptCount);
+                    await processResponseWithMongo(nextPrompt, attemptCount, logId);
 
                 } catch (queryErr: any) {
                     console.error("MongoDB Query Failed", queryErr);
                     const errMsg = queryErr.message || String(queryErr);
                     
                     if (errMsg.includes('Access denied')) {
+                        const accessDeniedMsg = `⚠️ **Access Restricted**\n\n${errMsg}`;
                         setMessages(prev => {
                             const updated = [...prev];
                             updated[messageIndex] = { 
                                 role: 'model', 
-                                text: `⚠️ **Access Restricted**\n\n${errMsg}`, 
+                                text: accessDeniedMsg, 
                                 type: 'text' 
                             };
                             return updated;
                         });
+                        if (logId) authAPI.updateLogResponse(logId, accessDeniedMsg).catch(() => {});
                         return;
                     } else if (attemptCount < 2) {
                         setMessages(prev => {
@@ -4118,26 +4170,29 @@ ${contextData.substring(0, 15000)}...
                         });
                         const availableCollections = sqlTables.join(', ');
                         const repairPrompt = `The MongoDB query failed with error: "${errMsg}". Available collections are: ${availableCollections || 'None'}. Please generate a corrected \`\`\`mongodb query or answer without querying.`;
-                        await processResponseWithMongo(repairPrompt, attemptCount + 1);
+                        await processResponseWithMongo(repairPrompt, attemptCount + 1, logId);
                     } else {
+                        const queryFailedMsg = friendlyMessage + `\n\n_⚠️ Query failed: ${errMsg.substring(0, 100)}. Answering based on available context._`;
                         setMessages(prev => {
                              const updated = [...prev];
-                             updated[messageIndex].text = friendlyMessage + `\n\n_⚠️ Query failed: ${errMsg.substring(0, 100)}. Answering based on available context._`;
+                             updated[messageIndex].text = queryFailedMsg;
                              return updated;
                         });
+                        if (logId) authAPI.updateLogResponse(logId, queryFailedMsg).catch(() => {});
                         const fallbackPrompt = `The MongoDB query failed with error: "${errMsg}". Please answer based on general knowledge and context. Do NOT generate a MongoDB query again.`;
-                        await processResponseWithMongo(fallbackPrompt, attemptCount + 1);
+                        await processResponseWithMongo(fallbackPrompt, attemptCount + 1, logId);
                     }
                 }
             } else {
                  const responseCheck = validateResponseAccess(fullResponse);
                  if (!responseCheck.valid) {
-                     const deniedMessage = `⚠️ **Access Restricted**\n\nI apologize, but my response referenced data sources you don't have access to: **${responseCheck.unauthorizedReferences.map(f => f.replace('.csv', '').replace(/_/g, ' ')).join(', ')}**\n\nYou currently have access to: ${userAccessibleFiles.length > 0 ? userAccessibleFiles.map(f => f.replace('.csv', '').replace(/_/g, ' ')).join(', ') : 'All data sources (Admin access)'}`;
+                     const deniedMessage2 = `⚠️ **Access Restricted**\n\nI apologize, but my response referenced data sources you don't have access to: **${responseCheck.unauthorizedReferences.map(f => f.replace('.csv', '').replace(/_/g, ' ')).join(', ')}**\n\nYou currently have access to: ${userAccessibleFiles.length > 0 ? userAccessibleFiles.map(f => f.replace('.csv', '').replace(/_/g, ' ')).join(', ') : 'All data sources (Admin access)'}`;
                      setMessages(prev => {
                          const updated = [...prev];
-                         updated[messageIndex] = { role: 'model', text: deniedMessage, type: 'text' };
+                         updated[messageIndex] = { role: 'model', text: deniedMessage2, type: 'text' };
                          return updated;
                      });
+                     if (logId) authAPI.updateLogResponse(logId, deniedMessage2).catch(() => {});
                      scrollToBottom();
                      return;
                  }
@@ -4148,12 +4203,13 @@ ${contextData.substring(0, 15000)}...
                         msgType = 'simulation';
                      }
                  }
+                 const cleanResponse = removeQueryFromResponse(fullResponse);
                  setMessages(prev => {
                      const updated = [...prev];
-                     const cleanResponse = removeQueryFromResponse(fullResponse);
                      updated[messageIndex] = { role: 'model', text: cleanResponse, type: msgType };
                      return updated;
                  });
+                 if (logId) authAPI.updateLogResponse(logId, cleanResponse).catch(() => {});
             }
         } catch (err: any) {
             let errorMessage = "I encountered an issue processing your request.";
@@ -4177,11 +4233,12 @@ ${contextData.substring(0, 15000)}...
                 updated[messageIndex] = { role: 'error' as const, text: errorMessage, type: 'text' };
                 return updated;
             });
+            if (logId) authAPI.updateLogResponse(logId, errorMessage).catch(() => {});
         }
     };
 
-    authAPI.logPrompt(cleanText).catch(() => {});
-    await processResponseWithMongo(finalPrompt, 0);
+    const logId = await authAPI.logPrompt(cleanText);
+    await processResponseWithMongo(finalPrompt, 0, logId ?? undefined);
 
     setIsTyping(false);
     setRetryCount(0);
@@ -4498,7 +4555,7 @@ ${contextData.substring(0, 15000)}...
   // ============================================
 
   return (
-    <div className="min-h-screen bg-pink-50/20 font-sans text-slate-900 flex flex-col selection:bg-pink-100 selection:text-pink-900">
+    <div className="h-full min-h-screen bg-pink-50/20 font-sans text-slate-900 flex flex-col overflow-hidden selection:bg-pink-100 selection:text-pink-900">
       <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-pink-100 shadow-sm transition-all">
         <div className="max-w-[1600px] mx-auto px-6 h-20 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -4543,7 +4600,7 @@ ${contextData.substring(0, 15000)}...
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-[1600px] mx-auto px-6 py-8 flex flex-col gap-10 h-[calc(100vh-100px)]">
+      <main className="flex-1 w-full max-w-[1920px] mx-auto px-6 pt-6 pb-2 flex flex-col gap-6 min-h-0 overflow-hidden">
         {activeTab === 'city_studio' ? (
            <CityContentStudio 
               onGenerateThemes={handleGenerateThemes}
@@ -4552,31 +4609,9 @@ ${contextData.substring(0, 15000)}...
               dataContext={Object.values(layerData).join('\n').substring(0, 10000)}
            />
         ) : (
-           <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 h-full animate-in fade-in duration-500">
-              
-              {/* Left Column: 5-Layer Data Architecture */}
-              <div className="xl:col-span-4 flex flex-col gap-4 h-full overflow-hidden flex-shrink-0">
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <div className="p-2 bg-pink-100 rounded-lg text-pink-700"><Database size={20} /></div>
-                    <div>
-                        <h2 className="text-xl font-bold text-slate-800 leading-none">Data Engine</h2>
-                        <p className="text-xs text-slate-500 font-medium mt-1">5-Layer Intelligence Stack</p>
-                    </div>
-                  </div>
-                  
-                  <div className="flex-1 overflow-y-auto pr-2 space-y-4 pb-4">
-                      {DATA_LAYERS.map(layer => (
-                          <LayerInputGroup 
-                              key={layer.id} 
-                              layer={layer} 
-                              onDataChange={(files) => handleLayerDataChange(layer.id, files)}
-                          />
-                      ))}
-                  </div>
-              </div>
-
-              {/* Right Column: Strategic Nexus & Chat */}
-              <div className="xl:col-span-8 flex flex-col gap-4 h-full overflow-hidden">
+           <div className="grid grid-cols-1 xl:grid-cols-12 grid-rows-1 gap-6 h-full min-h-0 flex-1 animate-in fade-in duration-500">
+              {/* Strategic Nexus & Chat (full width) */}
+              <div className="xl:col-span-12 flex flex-col gap-3 h-full min-h-0 overflow-hidden flex-1">
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <div className="p-2 bg-purple-100 rounded-lg text-purple-700"><Compass size={20} /></div>
                     <div>
@@ -4622,10 +4657,10 @@ ${contextData.substring(0, 15000)}...
                   </div>
 
                   {/* Main Chat Interface */}
-                  <div className="flex-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col relative">
+                  <div className="flex-1 min-h-0 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col relative w-full">
                       
                       {/* Chat Messages */}
-                      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/30 scrollbar-hide">
+                      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6 bg-slate-50/30 scrollbar-hide">
                           {(messages || []).filter((msg): msg is { role: 'user' | 'model' | 'error'; text: string; type?: 'text' | 'simulation' } => msg != null && typeof (msg as { text?: unknown })?.text === 'string').map((msg, idx) => {
                               // Parsing data once
                               const chartData = parseChartJSON(msg.text);
@@ -4650,7 +4685,7 @@ ${contextData.substring(0, 15000)}...
                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm ${msg.role === 'user' ? 'bg-gradient-to-br from-slate-700 to-slate-900 text-white' : (msg.role === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-gradient-to-br from-pink-500 to-rose-600 text-white')}`}>
                                      {msg.role === 'user' ? <User size={16} /> : (msg.role === 'error' ? <AlertTriangle size={16} /> : <Bot size={16} />)}
                                  </div>
-                                 <div className={`flex flex-col max-w-[85%] gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                 <div className={`flex flex-col max-w-[95%] gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                                      <div className={`rounded-2xl p-5 shadow-sm 
                                         ${msg.role === 'user' 
                                             ? 'bg-gradient-to-br from-slate-800 to-slate-900 text-white rounded-tr-sm shadow-md' 
@@ -4703,7 +4738,7 @@ ${contextData.substring(0, 15000)}...
                       </div>
 
                       {/* Simulation Bar (Embedded in Chat) */}
-                      <div className="px-6 pb-2 pt-2 bg-gradient-to-b from-transparent to-white border-t border-slate-50">
+                      <div className="flex-shrink-0 px-6 pb-2 pt-2 bg-gradient-to-b from-transparent to-white border-t border-slate-50 w-full">
                           <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-2 px-1">
                               <Zap size={12} className="text-amber-400" />
                               <span>Simulation Mode</span>
@@ -4729,7 +4764,7 @@ ${contextData.substring(0, 15000)}...
                       </div>
 
                       {/* Main Input Area */}
-                      <div className="p-4 bg-white border-t border-slate-100">
+                      <div className="flex-shrink-0 p-4 bg-white border-t border-slate-100 w-full">
                           <div className="flex gap-3 items-end">
                               <button 
                                  onClick={() => chatFileInputRef.current?.click()}
