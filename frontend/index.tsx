@@ -2258,9 +2258,9 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-pink-50">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-pink-50">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 shadow-sm">
+      <header className="flex-shrink-0 bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
@@ -2293,7 +2293,8 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Strategic Knowledge Base Banner */}
         <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl shadow-xl p-8 mb-8 text-white">
           <div className="flex items-start justify-between">
@@ -2698,6 +2699,7 @@ const AdminPanel = ({ currentUser, onLogout, onBack }: { currentUser: AuthUser; 
               </div>
             </div>
           )}
+        </div>
         </div>
       </main>
     </div>
